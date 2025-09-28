@@ -1,0 +1,194 @@
+import streamlit as st
+import pandas as pd
+
+from db_function import(
+    connect_to_db,
+    get_basic_info,
+    get_basic_tables,
+    add_new_manual_id,
+    get_categories,
+    get_suppliers,
+    get_all_products,
+    get_product_history,
+    place_reorder,
+    get_pending_reorders,
+    update_reorder
+)
+
+st.sidebar.title("Inventory Management Dashboard")
+option = st.sidebar.radio("Select Options", ["Basic Information","Operational Tasks"])
+
+# -------------------------------------------------------------------------------
+#  Main Space
+
+conn = connect_to_db()
+cursor= conn.cursor(dictionary= True)
+
+st.title("Inventory and Supplychain Dashboard")
+
+# --------------Basic Information Space----------------------#
+
+if option == "Basic Information":
+    st.header("Basic Metrics")
+    
+    #  get basic information
+    basic_info = get_basic_info(cursor)
+
+    cols= st.columns(3)
+    keys= list(basic_info.keys())
+
+    for i in range(3):
+        cols[i].metric(label= keys[i], value= basic_info[keys[i]])
+
+    cols= st.columns(3)
+
+    for i in range(3,6):
+
+        cols[i-3].metric(label= keys[i], value= basic_info[keys[i]])
+
+
+    st.divider()
+
+
+    #  ----- Basic Tables -------#
+
+    tables = get_basic_tables(cursor)
+    for label,data in tables.items():
+        st.subheader(label)
+        df= pd.DataFrame(data)
+        st.dataframe(df)
+        st.divider()
+
+
+elif option == "Operational Tasks":
+
+    st.header("Operational Tasks")
+
+    selected_task = st.selectbox("Choose a Task",["Add New Product","Product History","Place Reorder","Receive Reorder"])
+
+    if selected_task == "Add New Product":
+
+        with st.form("Add_Product_Form"):
+            product_name = st.text_input("Product_Name")
+            categories = get_categories(cursor)
+            product_category = st.selectbox("Category",categories)
+            price = st.number_input("Price",min_value=0.00)
+            stock_quantity= st.number_input("Stock Quantity",min_value=0.00)
+            reorder_level = st.number_input("Reorder Level",min_value= 0.00)
+
+            suppliers = get_suppliers(cursor)
+            supplier_ids = [i["supplier_id"] for i in suppliers]
+            supplier_names = [i["supplier_name"] for i in suppliers]
+
+            supplier = st.selectbox("Supplier",
+                                    options= supplier_ids,
+                                    format_func= lambda x : supplier_names[supplier_ids.index(x)])
+            
+            submitted = st.form_submit_button("Add Product")
+
+            if submitted:
+                if not product_name:
+                    st.error("Please Enter a Product")
+                else:
+                    try:
+                        add_new_manual_id(
+                            cursor,
+                            conn,
+                            product_name,
+                            product_category,
+                            price,
+                            stock_quantity,
+                            reorder_level,
+                            supplier)
+                        
+                        st.success(f"Product {product_name} added Sucessfully")
+                        
+                    except Exception as e:
+                        st.error(f"Error : {e}")
+
+
+    if selected_task == "Product History":
+
+        st.header("Product Inventory History")
+
+        #  products list
+
+        products = get_all_products(cursor)
+        product_name = [i["product_name"] for i in products]
+        product_ids = [i["product_id"] for i in products]
+
+        selected_product= st.selectbox("Select Product", options= product_name)
+        selected_product_id= product_ids[product_name.index(selected_product)]
+
+        if selected_product:
+            product_history= get_product_history(cursor,selected_product_id)
+            df = pd.DataFrame(product_history)
+            st.dataframe(df)
+        else:
+            st.info("No History for Selected Product")
+
+
+    if selected_task == "Place Reorder":
+
+        products = get_all_products(cursor)
+        product_name = [i["product_name"] for i in products]
+        product_ids = [i["product_id"] for i in products]
+
+        with st.form("Place a Reorder Form"):
+
+
+            reorder_product_id = st.selectbox("Product Name",
+                                              options= product_ids,
+                                              format_func=lambda x : product_name[product_ids.index(x)])
+            
+            reorder_quantity = st.number_input("Reorder Quantity",min_value=0.00)
+
+            submitted = st.form_submit_button("Place Reorder")
+
+            if submitted:
+                if not reorder_product_id:
+                    st.error("Please enter a Product for Reorder")
+
+                else:
+                    try:
+                        place_reorder(
+                            cursor,
+                            conn,
+                            reorder_product_id,
+                            reorder_quantity
+                        )  
+
+                        st.success(f"Reorder for product  placed Sucessfully")
+
+                    except Exception as e:
+                        st.error(f"Error {e}")
+
+
+
+    if selected_task == "Receive Reorder":
+
+        with st.form("Mark Reorder as Received"):
+
+        # st.header("Mark Reorder as Received")
+
+            pending_reorders = get_pending_reorders(cursor)
+            reorder_ids= [i["reorder_id"] for i in pending_reorders]
+            products_name = [i["product_name"] for i in pending_reorders]
+            labels= [f"ID: {rid} - {pname}" for rid, pname in zip(reorder_ids,products_name)]
+
+            selected_product_received = st.selectbox("Received Order",
+                                                 options=reorder_ids,
+                                                 format_func= lambda x : labels[reorder_ids.index(x)])
+        
+        
+            submitted_reorder= st.form_submit_button("Mark Product as Received")
+
+            if submitted_reorder:
+                if not selected_product_received:
+                    st.error("Select a Product")
+                else:
+                    try:
+                        update_reorder(cursor, conn, selected_product_received)
+                        st.success("Order Marked as Received")
+                    except Exception as e:
+                        st.error(f"Error : {e}")

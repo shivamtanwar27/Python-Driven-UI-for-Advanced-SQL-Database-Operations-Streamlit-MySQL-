@@ -1,0 +1,150 @@
+import mysql.connector
+
+def connect_to_db():
+    return mysql.connector.connect(
+    host= "localhost",
+    user= "root",
+    password= "Admin",
+    database= "project"
+)
+
+def get_basic_info(cursor):
+    queries = {
+    "Total Suppliers": """
+        SELECT COUNT(supplier_id) AS total_suppliers 
+        FROM project.suppliers;
+    """,
+    
+    "Total Products": """
+        SELECT COUNT(product_id) AS total_products 
+        FROM project.products;
+    """,
+    
+    "Total Categories": """
+        SELECT COUNT(DISTINCT category) AS total_categories 
+        FROM project.products;
+    """,
+    
+    "Total Sales Value (last 1 Year)": """
+        SELECT ROUND(SUM(ABS(ps.change_quantity * p.price))) AS sales 
+        FROM project.stock_entries AS ps
+        INNER JOIN project.products AS p
+            ON ps.product_id = p.product_id
+        WHERE ps.change_type = "Sale"
+          AND ps.entry_date >= (
+              SELECT DATE_SUB(MAX(entry_date), INTERVAL 12 MONTH) 
+              FROM project.stock_entries
+          );
+    """,
+    
+    "Total Restock Value (last 1 Year)": """
+        SELECT ROUND(SUM(ABS(ps.change_quantity * p.price))) AS total_restock 
+        FROM project.stock_entries AS ps
+        INNER JOIN project.products AS p
+            ON ps.product_id = p.product_id
+        WHERE ps.change_type = "Restock"
+          AND ps.entry_date >= (
+              SELECT DATE_SUB(MAX(entry_date), INTERVAL 12 MONTH) 
+              FROM project.stock_entries
+          );
+    """,
+    
+    "Below Reorder and Pending Reorders": """
+        SELECT COUNT(*) 
+        FROM (
+            SELECT * 
+            FROM project.products
+            WHERE stock_quantity <= reorder_level
+        ) t1
+        INNER JOIN (
+            SELECT * 
+            FROM project.reorders
+            WHERE status = "Pending"
+        ) t2
+        ON t1.product_id = t2.product_id;
+    """
+             }
+
+    result= {}
+    for label, query in queries.items():
+        cursor.execute(query)
+        result[label]= list(cursor.fetchone().values())[0]
+
+    return result
+
+    
+def get_basic_tables(cursor):
+    queries = {
+    "Supplier Contact Details": """
+        SELECT supplier_name, contact_name, email, phone 
+        FROM project.suppliers;
+    """,
+
+    "Products with Supplier and Stock": """
+        SELECT product_name, supplier_name, stock_quantity, reorder_level 
+        FROM project.products AS pp
+        INNER JOIN project.suppliers AS s
+            ON pp.supplier_id = s.supplier_id;
+    """,
+
+    "Products Needing Reorder": """
+        SELECT product_name, stock_quantity, reorder_level 
+        FROM project.products
+        WHERE stock_quantity <= reorder_level;
+    """
+        }
+    result2 = {}
+    for label,query in queries.items():
+        cursor.execute(query)
+        result2[label] = cursor.fetchall()
+
+    return result2   
+
+def add_new_manual_id(cursor, conn, p_product,p_category,p_price,p_stock,p_reorder,p_supplier):
+    proc_call= "call AddNewProductManualID(%s,%s,%s,%s,%s,%s)"
+    params= (p_product,p_category,p_price,p_stock,p_reorder,p_supplier)
+    cursor.execute(proc_call,params)
+    conn.commit() 
+
+def get_categories(cursor):
+    cursor.execute("SELECT DISTINCT category from project.products order by category;")
+    rows = cursor.fetchall()   
+    return [row["category"] for row in rows]
+
+
+def get_suppliers(cursor):
+    cursor.execute("SELECT supplier_id, supplier_name from project.suppliers;")
+    res=  cursor.fetchall()
+    return res
+
+def get_product_history(cursor,product_id):
+    query = f"select * from product_inventory_history where product_id = {product_id} order by record_date desc"
+    cursor.execute(query)
+    return cursor.fetchall()
+
+def get_all_products(cursor):
+    cursor.execute("select product_id, product_name from project.products order by product_name")
+    return cursor.fetchall()
+
+def place_reorder(cursor, conn, product_id,reorder_quantity):
+    query = """INSERT INTO project.reorders (reorder_id, product_id,reorder_quantity,reorder_date,status)
+               select max(reorder_id)+1,%s,%s,curdate(),"Ordered" 
+               from project.reorders; """
+    cursor.execute(query,(product_id,reorder_quantity))
+    conn.commit()
+
+
+def get_pending_reorders(cursor):
+    cursor.execute("""SELECT reorder_id, product_name FROM
+                      (SELECT * FROM project.reorders 
+                      WHERE status = "Ordered")tab1
+                      inner join project.products as tab2
+                      on tab1.product_id = tab2.product_id
+                      order by reorder_id;""")
+    return cursor.fetchall()
+
+
+def update_reorder(cursor,conn,reorder_id):
+    cursor.execute("CALL MarkReorderAsReceived(%s)",(reorder_id,))
+    conn.commit()
+
